@@ -1,0 +1,130 @@
+#!/usr/bin/expect -f
+# Drive UMM's console installer (mono Console.exe) non-interactively: Assembly install
+# into the given .app (never the auto-detected Steam path).
+#
+# SAFETY: on 2026-10-10 a stray newline left by a ReadKey answer made the installer read
+# an empty path and fall back to the auto-detected Steam install, which it then patched.
+# So this script:
+#   - compares paths physically (symlinks resolved);
+#   - refuses to send the install command, or to confirm the install method, unless the
+#     Managed folder the installer reports is inside the target .app;
+#   - exits 0 only if the installer reported success (or an existing install in the
+#     target) and UMM's files are actually present in the target.
+# Prefer copying an existing patch (tools/build-arm64-bundle.sh does) over running this.
+# Mono's console ReadKey/ReadLine interplay under TERM=dumb is quirky (answers to ReadKey
+# prompts may leave a newline behind); the guards above are what make it safe.
+#
+# usage: install-umm.exp <UnityModManagerInstaller dir> <path/to/Game.app>
+set timeout 60
+set dir [lindex $argv 0]
+set app [lindex $argv 1]
+
+proc realpath {p} {
+  if {[catch {exec /bin/realpath $p} r]} { return [file normalize $p] }
+  return $r
+}
+proc refuse {msg} { puts "\n>>> REFUSING: $msg" ; exit 3 }
+
+if {![file isdirectory $app]} { puts "no app at $app" ; exit 2 }
+set app [realpath $app]
+set managed "$app/Contents/Resources/Data/Managed"
+# UMM writes individual files under Managed/ (and chmods them); a symlink anywhere in the
+# target could send those writes elsewhere, so refuse targets containing any.
+if {[catch {exec /usr/bin/find "$app/Contents" -type l -print -quit} link] || $link ne ""} {
+  refuse "target contains a symlink ($link)"
+}
+
+# Point UMM's remembered game path at the target before it starts: on startup the
+# installer probes its saved path for writability (creating and deleting a file there),
+# and that saved path was once the Steam install.
+set params [file normalize ~/.local/share/UnityModManagerNet/Params.xml]
+if {[file exists $params]} {
+  set fh [open $params r] ; set xml [read $fh] ; close $fh
+  set re {(<GameParam Name="Pathfinder: Wrath of the Righteous">\s*<Path>)[^<]*(</Path>)}
+  # XML-escape the path, then escape it again for regsub's replacement syntax.
+  set xmlpath [string map {& &amp; < &lt; > &gt;} $app]
+  if {[regsub $re $xml "\\1[string map {& \\& \\ \\\\} $xmlpath]\\2" xml]} {
+    set fh [open $params w] ; puts -nonewline $fh $xml ; close $fh
+    set fh [open $params r] ; set check [read $fh] ; close $fh
+    if {[string first "<Path>$xmlpath</Path>" $check] < 0} { refuse "couldn't set the saved game path in $params" }
+  } elseif {[regexp {<GameParam Name="Pathfinder: Wrath of the Righteous">(.*?)</GameParam>} $xml -> block]
+            && [regexp {<Path>[^<]+</Path>} $block]} {
+    # A saved path in a layout we don't recognise: it could be the Steam install.
+    refuse "a saved game path for Wrath in $params that this script can't rewrite"
+  }
+  # Otherwise no Wrath path is saved (UMM was only used for other games, or <Path />):
+  # nothing for the installer to probe.
+}
+
+cd $dir
+# TERM=dumb stops mono's console driver from sending cursor-position queries
+set env(TERM) dumb
+spawn mono Console.exe
+set target_ok 0
+set install_sent 0
+set outcome ""
+expect {
+  -re {\x1b\[6n} { send "\033\[1;1R" ; exp_continue }
+  -re {Selected '([^']*)' game. Do you want to change selection} {
+    if {$expect_out(1,string) ne "Pathfinder: Wrath of the Righteous"} { send "y\r" } else { send "n\r" }
+    exp_continue
+  }
+  -re {\] (\d+)\. Pathfinder: Wrath of the Righteous\r} { set n $expect_out(1,string) ; exp_continue }
+  "Number: " {
+    if {![info exists n]} { refuse "game list didn't include Pathfinder: Wrath of the Righteous" }
+    send "$n\r" ; exp_continue
+  }
+  -re {Game path detected as '([^']*)'. Do you want to change it} {
+    set target_ok 0
+    if {[realpath $expect_out(1,string)] ne $app} { send "y\r" } else { send "n\r" }
+    exp_continue
+  }
+  "Path: " { set target_ok 0 ; send "$app\r" ; exp_continue }
+  -re {Managed folder detected as '([^']*)'} {
+    set detected [realpath $expect_out(1,string)]
+    if {$detected ne $managed} { refuse "installer targets '$detected', not '$managed'" }
+    set target_ok 1
+    exp_continue
+  }
+  -re {is installed on .*Key: } {
+    if {!$target_ok} { refuse "an install was reported, but not for a confirmed target" }
+    set outcome "already installed" ; send "\r" ; exp_continue
+  }
+  -re {is not installed on .*Key: } {
+    if {!$target_ok} { refuse "install target not confirmed" }
+    set install_sent 1 ; send "i\r" ; exp_continue
+  }
+  -re {Installation method is selected as \[([A-Za-z]+)\]} {
+    if {!$target_ok || !$install_sent} { refuse "install-method prompt without a confirmed target and install command" }
+    if {$expect_out(1,string) ne "Assembly"} { send "y\r" ; set wantmethod 1 } else { send "n\r" }
+    exp_continue
+  }
+  -re {\] (\d+)\. Assembly\r} { set m $expect_out(1,string) ; exp_continue }
+  "Installation was successful." { set outcome "installed" ; exp_continue }
+  "Terminate." { set terminated 1 ; exp_continue }
+  "Key: " {
+    if {[info exists wantmethod]} {
+      if {!$target_ok} { refuse "method selection without a confirmed target" }
+      unset wantmethod ; send "$m\r"
+    } else {
+      send "\r"
+    }
+    exp_continue
+  }
+  timeout { puts "\n>>> TIMEOUT" ; exit 1 }
+  eof
+}
+set result [wait]
+# {pid spawn_id os_error status ?CHILDKILLED signal ...?}: extra fields mean a signal.
+# UMM's own Close() prints "Terminate." and then SIGTERMs itself (CloseMainWindow on
+# Mono), so that one combination is a normal exit; any other signal is not.
+set killed [expr {[llength $result] > 4}]
+set normal_term [expr {$killed && [lindex $result 5] eq "SIGTERM" && [info exists terminated]}]
+if {[lindex $result 2] != 0 || [lindex $result 3] != 0 || ($killed && !$normal_term)} {
+  puts "\n>>> installer exited abnormally: $result" ; exit 1
+}
+if {$outcome eq ""} { puts "\n>>> installer finished without reporting success" ; exit 1 }
+foreach f [list "$managed/UnityModManager/UnityModManager.dll" "$managed/UnityEngine.UIModule.dll.original_"] {
+  if {![file exists $f]} { puts "\n>>> expected $f after install; not found" ; exit 1 }
+}
+puts "\n>>> UMM $outcome in $app"

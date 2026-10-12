@@ -1,0 +1,10 @@
+{
+  "Id": "WrathPerf",
+  "DisplayName": "WrathPerf",
+  "Author": "loafykitten",
+  "Version": "0.1.0",
+  "ManagerVersion": "0.32.0",
+  "LoadAfter": ["WrathStats"],
+  "AssemblyName": "WrathPerf.dll",
+  "EntryMethod": "WrathPerf.Main.Load"
+}

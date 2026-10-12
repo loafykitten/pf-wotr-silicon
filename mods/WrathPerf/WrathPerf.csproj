@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>disable</Nullable>
+    <NativeDxt>$(MSBuildThisFileDirectory)../../native/wrathdxt</NativeDxt>
+  </PropertyGroup>
+  <ItemGroup>
+    <WrathRef Include="Assembly-CSharp;DXTCompressor;UnityEngine;UnityEngine.CoreModule;UnityEngine.IMGUIModule" />
+    <UmmRef Include="UnityModManager;0Harmony" />
+    <!-- Installed next to WrathPerf.dll (Directory.Build.targets' InstallMod). -->
+    <ModFiles Include="$(NativeDxt)/build/libwrathdxt.dylib" />
+  </ItemGroup>
+  <!-- The native compressor (arm64). Run native/wrathdxt/test/verify.sh after changing it. -->
+  <Target Name="BuildNativeDxt" BeforeTargets="Build">
+    <Exec Command="&quot;$(NativeDxt)/build.sh&quot;" StandardOutputImportance="low" />
+  </Target>
+</Project>

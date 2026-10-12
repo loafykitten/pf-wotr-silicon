@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Run by test/verify.sh through monohost on the game's Mono; game DLLs come from the
+       build's Managed/ folder at run time, so they're referenced but not copied. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <WrathBuild Condition="'$(WrathBuild)' == ''">$(MSBuildThisFileDirectory)../../../../builds/arm64</WrathBuild>
+    <WrathManaged>$(WrathBuild)/Wrath.app/Contents/Resources/Data/Managed</WrathManaged>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="DXTCompressor;Owlcat.Runtime.Core;UnityEngine.CoreModule" HintPath="$(WrathManaged)/%(Identity).dll" Private="false" />
+  </ItemGroup>
+</Project>

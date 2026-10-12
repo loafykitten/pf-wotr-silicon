@@ -1,0 +1,11 @@
+# Never commit game files: builds hold clones of the game, and nothing derived from its
+# data or code belongs in this repository.
+/builds/
+/decompiled/
+/backups/
+/runs/
+*.zks
+*.app
+bin/
+obj/
+.DS_Store
